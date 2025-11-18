@@ -170,10 +170,13 @@ func main() {
 		muxer.HandleFunc("/birdflapprefixtesterconf", func(w http.ResponseWriter, r *http.Request) {
 			prefixes, err := feedSource.GetPrefixes()
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				log.Printf("failed to get prefixes: %v", err)
+				http.Error(w, "", http.StatusInternalServerError)
+				return
 			}
-			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Cache-Control", "max-age=604800, public, stale-while-revalidate")
 			fmt.Fprintln(w, prefixes.ToBirdTesterFunction())
 		})
 
