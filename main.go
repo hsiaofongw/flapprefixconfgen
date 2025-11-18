@@ -4,18 +4,23 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
 var resolverEndpoint = flag.String("resolver-endpoint", "[fd42:d42:d42:54::1]:53", "The DNS resolver endpoint to use")
 var allowInsecure = flag.Bool("allow-insecure", false, "Allow insecure connections")
 var feedSourceURL = flag.String("feed-source-url", "https://flaps.collector.dn42/flaps/active/compact", "The URL of the feed source")
+var bindUnixSocket = flag.String("bind-unix-socket", "/var/run/flapprefixes.sock", "The Unix socket to bind to")
 
 type FlapPrefixes struct {
 	Prefixes []*net.IPNet
@@ -31,7 +36,7 @@ func generateTestCodeBlock(prefixes []*net.IPNet) []string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "] then {")
+	lines = append(lines, "        ] then {")
 	lines = append(lines, "            return true;")
 	lines = append(lines, "        }")
 	return lines
@@ -59,7 +64,7 @@ func (prefixes *FlapPrefixes) ToBirdTesterFunction() string {
 
 	if len(v6Networks) > 0 {
 		lines = append(lines, "    if net.type = NET_IP6 then {")
-		lines = append(lines, generateTestCodeBlock(v4Networks)...)
+		lines = append(lines, generateTestCodeBlock(v6Networks)...)
 		lines = append(lines, "    }")
 	}
 
@@ -72,6 +77,11 @@ type KioubitsFeedSource struct {
 	URL string
 }
 
+func NewKioubitsFeedSource(url string) (*KioubitsFeedSource, error) {
+	feedSource := &KioubitsFeedSource{URL: url}
+	return feedSource, nil
+}
+
 func getCustomHTTPClient(resolverEndpoint *string, allowInsecure *bool) (*http.Client, error) {
 	var customResolver *net.Resolver
 	if resolverEndpoint != nil {
@@ -81,7 +91,7 @@ func getCustomHTTPClient(resolverEndpoint *string, allowInsecure *bool) (*http.C
 				d := net.Dialer{
 					Timeout: 10 * time.Second,
 				}
-				return d.DialContext(ctx, network, "resolverEndpoint") // Replace with your desired DNS server
+				return d.DialContext(ctx, network, *resolverEndpoint) // Replace with your desired DNS server
 			},
 		}
 	}
@@ -140,11 +150,46 @@ func (kbFS *KioubitsFeedSource) GetPrefixes() (*FlapPrefixes, error) {
 
 func main() {
 	flag.Parse()
-	feedSource := &KioubitsFeedSource{URL: *feedSourceURL}
-	prefixes, err := feedSource.GetPrefixes()
+	feedSource, err := NewKioubitsFeedSource(*feedSourceURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to get prefixes from %s: %v", *feedSourceURL, err)
+		fmt.Fprintf(os.Stderr, "failed to create Kioubits feed source: %v", err)
 		os.Exit(1)
 	}
-	fmt.Fprint(os.Stdout, prefixes.ToBirdTesterFunction())
+
+	listener, err := net.Listen("unix", *bindUnixSocket)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to listen on %s: %v", *bindUnixSocket, err)
+		os.Exit(1)
+	}
+	defer listener.Close()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		muxer := http.NewServeMux()
+		muxer.HandleFunc("/birdflapprefixtesterconf", func(w http.ResponseWriter, r *http.Request) {
+			prefixes, err := feedSource.GetPrefixes()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, prefixes.ToBirdTesterFunction())
+		})
+
+		server := &http.Server{
+			Handler: muxer,
+		}
+		log.Printf("server started on %s", listener.Addr())
+		err := server.Serve(listener)
+		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				fmt.Fprintf(os.Stderr, "failed to serve: %v", err)
+				os.Exit(1)
+			}
+		}
+		log.Printf("server stopped: %v", err)
+	}()
+
+	<-sigChan
 }
