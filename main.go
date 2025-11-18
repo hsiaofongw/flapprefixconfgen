@@ -174,9 +174,9 @@ func main() {
 				http.Error(w, "", http.StatusInternalServerError)
 				return
 			}
-			w.WriteHeader(http.StatusOK)
 			w.Header().Set("Content-Type", "text/plain")
 			w.Header().Set("Cache-Control", "max-age=604800, public, stale-while-revalidate")
+			w.WriteHeader(http.StatusOK)
 			fmt.Fprintln(w, prefixes.ToBirdTesterFunction())
 		})
 
