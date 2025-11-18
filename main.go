@@ -177,7 +177,7 @@ func main() {
 				return
 			}
 			w.Header().Set("Content-Type", "text/plain")
-			w.Header().Set("Cache-Control", "max-age=604800, public, stale-while-revalidate")
+			w.Header().Set("Cache-Control", "max-age=3600, public, stale-while-revalidate")
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintln(w, prefixes.ToBirdTesterFunction())
 		})
