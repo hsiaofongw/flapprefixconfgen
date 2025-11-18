@@ -168,6 +168,8 @@ func main() {
 	go func() {
 		muxer := http.NewServeMux()
 		muxer.HandleFunc("/birdflapprefixtesterconf", func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("request received from %s: %s", r.RemoteAddr, r.URL.Path)
+
 			prefixes, err := feedSource.GetPrefixes()
 			if err != nil {
 				log.Printf("failed to get prefixes: %v", err)
